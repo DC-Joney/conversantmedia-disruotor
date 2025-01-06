@@ -24,20 +24,19 @@ import java.util.concurrent.atomic.AtomicLongArray;
 
 /**
  * Avoid false cache line sharing
- *
+ * <p>
  * Created by jcairns on 5/28/14.
  */
 final class ContendedAtomicLong {
 
     static final int CACHE_LINE = Integer.getInteger("Intel.CacheLineSize", 64); // bytes
 
-    private static final int CACHE_LINE_LONGS = CACHE_LINE/Long.BYTES;
+    private static final int CACHE_LINE_LONGS = CACHE_LINE / Long.BYTES;
 
     private final AtomicLongArray contendedArray;
 
-    ContendedAtomicLong(final long init)
-    {
-        contendedArray = new AtomicLongArray(2*CACHE_LINE_LONGS);
+    ContendedAtomicLong(final long init) {
+        contendedArray = new AtomicLongArray(2 * CACHE_LINE_LONGS);
 
         set(init);
     }

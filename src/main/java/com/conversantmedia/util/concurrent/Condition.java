@@ -48,30 +48,40 @@ interface Condition {
     /*
      * progressively transition from spin to yield over time
      */
+    //这里主要针对的是spin的场景
     static int progressiveYield(final int n) {
-        if(n > 500) {
-            if(n<1000) {
+        //当自旋的次数大于500次时
+        if (n > 500) {
+            //当自旋的次数小于1000时
+            if (n < 1000) {
+                //0x7 = 7,每循环8次，让当前线程休眠50ns
                 // "randomly" yield 1:8
-                if((n & 0x7) == 0) {
+                if ((n & 0x7) == 0) {
                     LockSupport.parkNanos(PARK_TIMEOUT);
                 } else {
+                    //否则的话调用onSpinWait让当前线程让出cpu时间片
                     onSpinWait();
                 }
-            } else if(n<MAX_PROG_YIELD) {
+            }
+            //当自旋次数小于2000次时
+            else if (n < MAX_PROG_YIELD) {
                 // "randomly" yield 1:4
-                if((n & 0x3) == 0) {
+                //每循环3次，就让当前线程让出cpu时间片
+                if ((n & 0x3) == 0) {
                     Thread.yield();
                 } else {
+                    //调用onSpinWait 让当前线程让出cpu时间片
                     onSpinWait();
                 }
             } else {
+                //调用yield方法让出cpu时间片
                 Thread.yield();
                 return n;
             }
         } else {
             onSpinWait();
         }
-        return n+1;
+        return n + 1;
     }
 
     static void onSpinWait() {
@@ -79,14 +89,16 @@ interface Condition {
         // Java 9 hint for spin waiting PAUSE instruction
 
         //http://openjdk.java.net/jeps/285
-        // Thread.onSpinWait();
+        //效率方面 onSpinWait=Thread.sleep(0) > 空循环
+        //执行耗时方面 空循环 > onSpinWait > Thread.sleep(0)
+//        Thread.onSpinWait();
     }
 
     /**
      * Wait for timeout on condition
      *
-     * @param timeout - the amount of time in units to wait
-     * @param unit - the time unit
+     * @param timeout   - the amount of time in units to wait
+     * @param unit      - the time unit
      * @param condition - condition to wait for
      * @return boolean - true if status was detected
      * @throws InterruptedException - on interrupt
