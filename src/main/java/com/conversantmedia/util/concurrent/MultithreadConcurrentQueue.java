@@ -116,6 +116,11 @@ class MultithreadConcurrentQueuePadding4 extends MultithreadConcurrentQueuePaddi
     byte c161, c162, c163, c164, c165, c166, c167, c168; // long c16
 }
 
+/*
+    MultithreadConcurrentQueue 沿用了PushPullConcurrentQueue的思想，通headCache以及tailCache储存队列的head和tail位置
+    不过与PushPullQueue的区别在于，前一个是针对单线程的，后一个则是针对多线程的。
+    所以新增了tailCursor以及headCursor用于解决并发情况下的index问题，通过cas + 自旋来保证写入和读取数据对应的index位置的正确性
+ */
 public class MultithreadConcurrentQueue<E> extends MultithreadConcurrentQueuePadding4 implements ConcurrentQueue<E> {
     /*
      * Note to future developers/maintainers - This code is highly tuned
@@ -126,7 +131,7 @@ public class MultithreadConcurrentQueue<E> extends MultithreadConcurrentQueuePad
 
     // maximum allowed capacity
     // this must always be a power of 2
-    //
+    // 队列的大小
     protected final int size;
 
     // we need to compute a position in the ring buffer
@@ -135,17 +140,22 @@ public class MultithreadConcurrentQueue<E> extends MultithreadConcurrentQueuePad
     // aka x&mask
     final long mask;
 
+    //offerIndex 用于指向下一个添加元素的位置
     // the sequence number of the end of the queue
     final LongAdder tail = new LongAdder();
 
+    //用于解决并发情况下的index问题，依赖其cas解决
     final ContendedAtomicLong tailCursor = new ContendedAtomicLong(0L);
 
+    //存放数据的buffer
     // a ring buffer representing the queue
     final E[] buffer;
 
+    //pollIndex 用于指向最后一个获取元素的位置
     // the sequence number of the start of the queue
     final LongAdder head = new LongAdder();
 
+    //与tailCursor 类似，用于解决并发情况下的index问题，依赖其cas解决
     final ContendedAtomicLong headCursor = new ContendedAtomicLong(0L);
 
     /**
@@ -165,17 +175,21 @@ public class MultithreadConcurrentQueue<E> extends MultithreadConcurrentQueuePad
 
     @Override
     public boolean offer(E e) {
+        //自旋的次数
         int spin = 0;
 
         for (; ; ) {
+            //获取offerIndex
             final long tailSeq = tail.sum();
             // never offer onto the slot that is currently being polled off
             final long queueStart = tailSeq - size;
 
+            //计算是可以添加数据，这里的判断条件可以见PushPullConcurrentQueue的代码注释
             // will this sequence exceed the capacity
             if ((headCache > queueStart) || ((headCache = head.sum()) > queueStart)) {
                 // does the sequence still have the expected
                 // value
+                //如果满足条件，则通过cas保证只有一个线程可以添加数据，而其他cas失败的线程则会自旋，策略见Condition.progressiveYield
                 if (tailCursor.compareAndSet(tailSeq, tailSeq + 1L)) {
 
                     try {
@@ -183,11 +197,14 @@ public class MultithreadConcurrentQueue<E> extends MultithreadConcurrentQueuePad
                         // and we got access without contention
 
                         // convert sequence number to slot id
+                        //计算存放数据的位置
                         final int tailSlot = (int) (tailSeq & mask);
+                        //将数据添加到buffer数组中
                         buffer[tailSlot] = e;
 
                         return true;
                     } finally {
+                        //自增offerIndex
                         tail.increment();
                     }
                 } // else - sequence misfire, somebody got our spot, try again
@@ -196,22 +213,28 @@ public class MultithreadConcurrentQueue<E> extends MultithreadConcurrentQueuePad
                 return false;
             }
 
+            //当出现多线程争抢添加数据时通过progressiveYield自旋策略解决
             spin = Condition.progressiveYield(spin);
         }
     }
 
     @Override
     public E poll() {
+        //自旋的次数
         int spin = 0;
 
         for (; ; ) {
+            //获取pollIndex
             final long head = this.head.sum();
             // is there data for us to poll
+            //计算是否可以从队列中获取数据，这里的判断条件可以见PushPullConcurrentQueue的代码注释
             if ((tailCache > head) || (tailCache = tail.sum()) > head) {
                 // check if we can update the sequence
+                //如果满足条件，则通过cas保证只有一个线程可以添加数据，而其他cas失败的线程则会自旋，策略见Condition.progressiveYield
                 if (headCursor.compareAndSet(head, head + 1L)) {
                     try {
                         // copy the data out of slot
+                        //计算获取数据的位置
                         final int pollSlot = (int) (head & mask);
                         final E pollObj = (E) buffer[pollSlot];
 
@@ -220,6 +243,7 @@ public class MultithreadConcurrentQueue<E> extends MultithreadConcurrentQueuePad
 
                         return pollObj;
                     } finally {
+                        //自增pollIndex
                         this.head.increment();
                     }
                 } // else - somebody else is reading this spot already: retry
@@ -228,6 +252,7 @@ public class MultithreadConcurrentQueue<E> extends MultithreadConcurrentQueuePad
                 // do not notify - additional capacity is not yet available
             }
 
+            //当出现多线程争抢添加数据时通过progressiveYield自旋策略解决
             // this is the spin waiting for access to the queue
             spin = Condition.progressiveYield(spin);
         }
